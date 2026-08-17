@@ -1,3 +1,6 @@
 spring:
-  application:
-    name: challenge
+  datasource:
+    url: jdbc:postgresql://localhost:5433/financial_transactions?timezone=UTC
+    username: app_user
+    password: app_password
+    driver-class-name: org.postgresql.Driver
