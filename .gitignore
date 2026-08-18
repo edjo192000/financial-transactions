@@ -77,7 +77,6 @@ nbdist/
 .nb-gradle/
 
 ## Spring Boot ##
-application-local.yml
 application-local.properties
 application-secrets.yml
 

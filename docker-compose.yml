@@ -16,5 +16,15 @@ services:
       timeout: 5s
       retries: 5
 
+  mock-provider:
+    image: wiremock/wiremock:3.9.1
+    container_name: financial-transactions-mock-provider
+    ports:
+      - "9090:8080"
+    volumes:
+      - ./wiremock/mappings:/home/wiremock/mappings
+      - ./wiremock/__files:/home/wiremock/__files
+    entrypoint: ["/docker-entrypoint.sh", "--global-response-templating", "--verbose"]
+
 volumes:
   postgres_data:

@@ -1,0 +1,23 @@
+{
+  "priority": 1,
+  "scenarioName": "provider-outage",
+  "requiredScenarioState": "Recovered",
+  "request": {
+    "method": "POST",
+    "urlPath": "/provider/v1/execute",
+    "bodyPatterns": [
+      { "matchesJsonPath": { "expression": "$.accountId", "equalTo": "acc-cb-demo" } }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "transactionId": "txn-recovered-001",
+      "status": "APPROVED",
+      "balance": "{{jsonPath request.body '$.amount'}}",
+      "executedAt": "{{now}}"
+    },
+    "transformers": ["response-template"]
+  }
+}

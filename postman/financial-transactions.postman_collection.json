@@ -1,0 +1,480 @@
+{
+  "info": {
+    "_postman_id": "f4b1a2c0-3e7a-4a1b-9c2a-1a2b3c4d5e6f",
+    "name": "Financial Transactions API",
+    "description": "Colección para probar manualmente la Transaction Execution API: happy path, validaciones de negocio, rechazo del proveedor, idempotencia, timeout/retry, y demo de circuit breaker. Ver README.md para el flujo recomendado.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "wiremockUrl", "value": "http://localhost:9090", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "01 - Happy Path",
+      "item": [
+        {
+          "name": "Execute CREDIT Transaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-happy-path\",\n  \"type\": \"CREDIT\",\n  \"amount\": 1500.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Happy path credit transaction\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Ejecuta una transacción CREDIT válida. El proveedor mock la aprueba automáticamente (stub default-approved.json, prioridad más baja: cualquier request que no dispare un stub más específico cae aquí). Respuesta esperada: 201 Created, body con status=EXECUTED, providerTransactionId y balanceAfter poblados por el proveedor."
+          }
+        },
+        {
+          "name": "Query Transactions by Account",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/transactions?accountId=acc-happy-path",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"],
+              "query": [{ "key": "accountId", "value": "acc-happy-path" }]
+            },
+            "description": "Consulta filtrada por accountId. Debe incluir la transacción creada en el request anterior de esta carpeta. Respuesta esperada: 200 OK con un array JSON."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Business Rule Validations",
+      "item": [
+        {
+          "name": "Reject - Amount Below Minimum",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-validation-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 0.50,\n  \"currency\": \"MXN\",\n  \"description\": \"Amount too low\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Un monto <= $1.00 MXN viola la regla de negocio (Money.of). El proveedor NUNCA es invocado; la validación falla antes de llegar ahí. Respuesta esperada: 400 Bad Request, code=INVALID_AMOUNT."
+          }
+        },
+        {
+          "name": "Reject - DEBIT Above Limit",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-validation-demo\",\n  \"type\": \"DEBIT\",\n  \"amount\": 15000.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Debit above limit\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Los DEBIT tienen un límite de $10,000.00 MXN (TransactionRules). CREDIT no tiene este límite (ver siguiente carpeta si se prueba con CREDIT). Respuesta esperada: 400 Bad Request, code=DEBIT_LIMIT_EXCEEDED."
+          }
+        },
+        {
+          "name": "Reject - Unsupported Currency",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-validation-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"USD\",\n  \"description\": \"Unsupported currency\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Solo se soporta MXN. Respuesta esperada: 400 Bad Request, code=UNSUPPORTED_CURRENCY."
+          }
+        },
+        {
+          "name": "Reject - Missing Idempotency-Key Header",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-validation-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"MXN\",\n  \"description\": \"No idempotency key\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "El header Idempotency-Key es obligatorio. Respuesta esperada: 400 Bad Request (MissingRequestHeaderException, code=MISSING_HEADER)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Provider Rejection",
+      "item": [
+        {
+          "name": "Provider Rejects - Insufficient Funds",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-rejection-demo\",\n  \"type\": \"DEBIT\",\n  \"amount\": 9999999,\n  \"currency\": \"MXN\",\n  \"description\": \"Provider will reject this\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "amount=9999999 es el 'interruptor mágico' que dispara el stub insufficient-funds.json en WireMock (el proveedor responde 402 con code=INSUFFICIENT_FUNDS). Importante: un rechazo de negocio del proveedor NO es un error HTTP para esta API. Respuesta esperada: 201 Created, body con status=REJECTED, providerTransactionId y balanceAfter ausentes (omitidos por @JsonInclude NON_NULL)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Idempotency",
+      "item": [
+        {
+          "name": "Idempotent Request A",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "demo-idem-key-001" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-idem-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 250.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Idempotency demo\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Primer intento con una Idempotency-Key FIJA (\"demo-idem-key-001\", a propósito NO {{$guid}} — la necesitamos reutilizar en los siguientes dos requests). Respuesta esperada: 201 Created, status=EXECUTED. Anota el \"id\" del body: debe ser IDÉNTICO en el siguiente request."
+          }
+        },
+        {
+          "name": "Idempotent Request B (same key, same data)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "demo-idem-key-001" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-idem-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 250.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Idempotency demo\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Mismo Idempotency-Key y mismos datos que el request anterior. La transacción ya es EXECUTED (terminal), así que el sistema la devuelve tal cual SIN volver a llamar al proveedor. Respuesta esperada: 201 Created con el MISMO \"id\" que 'Idempotent Request A'. Verifica en GET {{wiremockUrl}}/__admin/requests que no llegó una segunda llamada al proveedor por este request."
+          }
+        },
+        {
+          "name": "Idempotency Conflict - Different Amount",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "demo-idem-key-001" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-idem-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 999.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Idempotency demo\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Misma Idempotency-Key (\"demo-idem-key-001\") pero con un amount distinto (999.00 en vez de 250.00). El sistema detecta que la key ya fue usada con datos diferentes. Respuesta esperada: 409 Conflict, code=IDEMPOTENCY_KEY_CONFLICT."
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Timeout & Retry Demo",
+      "item": [
+        {
+          "name": "Trigger Provider Timeout (internal retries happen transparently)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "demo-timeout-retry-key" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-timeout-test\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Timeout demo\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "accountId=\"acc-timeout-test\" es el 'interruptor mágico' que dispara el stub always-timeout.json: el proveedor se cuelga 8s (más que el read-timeout configurado). Este ÚNICO request tarda varios segundos porque Resilience4j reintenta internamente (maxAttempts) antes de darse por vencido — no verás las reintentos como requests separados aquí, ocurren dentro de esta llamada. Respuesta esperada (tras varios segundos): 504 Gateway Timeout, code=PROVIDER_TIMEOUT. La transacción igual queda persistida con status=FAILED (revisa con GET /transactions?accountId=acc-timeout-test)."
+          }
+        },
+        {
+          "name": "Inspect WireMock Request Journal",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{wiremockUrl}}/__admin/requests",
+              "host": ["{{wiremockUrl}}"],
+              "path": ["__admin", "requests"]
+            },
+            "description": "Request FUERA de la API principal, directo al admin API de WireMock. Filtra por accountId=acc-timeout-test en la respuesta: deberías ver VARIAS entradas (una por cada intento de Resilience4j) para la única llamada del request anterior — evidencia de que el retry realmente ocurrió contra el proveedor."
+          }
+        },
+        {
+          "name": "Retry FAILED Transaction (same Idempotency-Key)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "demo-timeout-retry-key" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-timeout-test\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Timeout demo\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "MISMA Idempotency-Key que el primer request de esta carpeta. Como la transacción existente está en status=FAILED (no terminal), el sistema vuelve a intentar contra el proveedor en vez de devolver el resultado congelado — seguirá fallando (el stub siempre se cuelga para este accountId) pero con el MISMO id de transacción que el primer intento. Vuelve a consultar GET {{wiremockUrl}}/__admin/requests después de este request: debe haber una(s) entrada(s) nueva(s), prueba de que sí se reintentó contra el proveedor."
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Circuit Breaker Demo (requiere perfil local activo)",
+      "description": "Requiere levantar la app con SPRING_PROFILES_ACTIVE=local (ver README) — ese perfil reduce slidingWindowSize/minimumNumberOfCalls a 4 para poder abrir el circuito en minutos en vez de necesitar 10+ llamadas fallidas. Flujo: Call 1 y 2 se cuelgan y fallan (stub cb-demo-step1/step2); para la Call 3 el circuito ya puede empezar a degradarse según la ventana; sigue con las siguientes requests en orden. Después de ver el circuito abierto, espera los ~10s de waitDurationInOpenState y repite una llamada con accountId=acc-cb-demo para ver la transición a HALF_OPEN (y a CLOSED si el scenario de WireMock ya llegó al paso 'Recovered').",
+      "item": [
+        {
+          "name": "CB Demo - Call 1",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-cb-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Circuit breaker demo call 1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "accountId=\"acc-cb-demo\" dispara el scenario de 3 pasos en WireMock (provider-outage). Esta primera llamada cae en el paso 'Started'→'FailedOnce': se cuelga y termina en timeout/fallo tras los reintentos. Tardará varios segundos."
+          }
+        },
+        {
+          "name": "CB Demo - Call 2",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-cb-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Circuit breaker demo call 2\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Segunda llamada: cae en el paso 'FailedOnce'→'Recovered' del scenario. También se cuelga y falla. Con el perfil local (minimumNumberOfCalls=4), estas fallas empiezan a alimentar la ventana del circuit breaker."
+          }
+        },
+        {
+          "name": "CB Demo - Call 3",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-cb-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Circuit breaker demo call 3\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Tercera llamada. Dependiendo de cuántos intentos internos de retry ya consumieron el scenario de WireMock, esta puede recibir la respuesta exitosa del paso 'Recovered', o seguir fallando si el circuito aún no decidió abrirse. Observa el tiempo de respuesta: si ya es instantáneo, el circuito se abrió."
+          }
+        },
+        {
+          "name": "CB Demo - Call 4",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-cb-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Circuit breaker demo call 4\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Cuarta llamada. Con minimumNumberOfCalls=4 del perfil local, a estas alturas el circuit breaker ya tiene evidencia suficiente en su ventana para decidir si abrirse."
+          }
+        },
+        {
+          "name": "Check Circuit Breaker Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator", "health"]
+            },
+            "description": "Con management.endpoint.health.show-details=always (perfil local), el bloque 'circuitBreakers' del health muestra el estado actual: CLOSED, OPEN o HALF_OPEN para la instancia 'transactionProvider'."
+          }
+        },
+        {
+          "name": "CB Demo - One More Call (should fail fast if OPEN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"acc-cb-demo\",\n  \"type\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"MXN\",\n  \"description\": \"Circuit breaker demo - post-open call\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"]
+            },
+            "description": "Si el circuito ya está OPEN, esta llamada debe fallar INSTANTÁNEAMENTE (sin esperar el delay del stub de WireMock) con 502 Bad Gateway, code=PROVIDER_UNAVAILABLE y mensaje mencionando el circuit breaker — Resilience4j corta antes de siquiera intentar la red."
+          }
+        },
+        {
+          "name": "Inspect WireMock Journal (confirm no new request reached the provider)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{wiremockUrl}}/__admin/requests",
+              "host": ["{{wiremockUrl}}"],
+              "path": ["__admin", "requests"]
+            },
+            "description": "Confirma que la llamada anterior ('One More Call') NO generó una entrada nueva en el journal de WireMock — prueba directa de que el circuit breaker cortó antes de intentar la red, no que el proveedor respondió rápido."
+          }
+        },
+        {
+          "name": "Circuit Breaker Events History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/circuitbreakerevents",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator", "circuitbreakerevents"]
+            },
+            "description": "Historial de eventos/transiciones del circuit breaker (CLOSED→OPEN, llamadas rechazadas, etc.) para la instancia 'transactionProvider'."
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Query & Pagination",
+      "item": [
+        {
+          "name": "Filter by Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/transactions?status=EXECUTED",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"],
+              "query": [{ "key": "status", "value": "EXECUTED" }]
+            },
+            "description": "Filtra transacciones por status. Valores posibles: EXECUTED, REJECTED, FAILED."
+          }
+        },
+        {
+          "name": "Filter by Type",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/transactions?type=DEBIT",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"],
+              "query": [{ "key": "type", "value": "DEBIT" }]
+            },
+            "description": "Filtra transacciones por type. Valores posibles: CREDIT, DEBIT."
+          }
+        },
+        {
+          "name": "Paginate Results",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/transactions?page=0&limit=5",
+              "host": ["{{baseUrl}}"],
+              "path": ["transactions"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "limit", "value": "5" }
+              ]
+            },
+            "description": "Pagina resultados. page es 0-indexado, limit por defecto es 20 y se acota a un máximo de 100."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "priority": 1,
+  "scenarioName": "provider-outage",
+  "requiredScenarioState": "FailedOnce",
+  "newScenarioState": "Recovered",
+  "request": {
+    "method": "POST",
+    "urlPath": "/provider/v1/execute",
+    "bodyPatterns": [
+      { "matchesJsonPath": { "expression": "$.accountId", "equalTo": "acc-cb-demo" } }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 8000
+  }
+}

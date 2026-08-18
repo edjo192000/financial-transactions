@@ -1,0 +1,19 @@
+{
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "urlPath": "/provider/v1/execute",
+    "bodyPatterns": [
+      { "matchesJsonPath": { "expression": "$.amount", "equalTo": "9999999" } }
+    ]
+  },
+  "response": {
+    "status": 402,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "status": "REJECTED",
+      "code": "INSUFFICIENT_FUNDS",
+      "message": "The account does not have enough balance to complete the transaction"
+    }
+  }
+}

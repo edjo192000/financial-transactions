@@ -1,0 +1,23 @@
+resilience4j:
+  circuitbreaker:
+    instances:
+      transactionProvider:
+        slidingWindowSize: 4
+        minimumNumberOfCalls: 4
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 2
+  retry:
+    instances:
+      transactionProvider:
+        maxAttempts: 3
+        waitDuration: 500ms
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, circuitbreakers, circuitbreakerevents
+  endpoint:
+    health:
+      show-details: always
