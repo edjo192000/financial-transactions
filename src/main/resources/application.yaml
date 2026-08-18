@@ -1,6 +1,9 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5433/financial_transactions?timezone=UTC
+    url: jdbc:postgresql://localhost:5433/financial_transactions
     username: app_user
     password: app_password
     driver-class-name: org.postgresql.Driver
+
+server:
+  port: 8080
