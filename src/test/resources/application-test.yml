@@ -1,0 +1,17 @@
+resilience4j:
+  circuitbreaker:
+    instances:
+      transactionProvider:
+        waitDurationInOpenState: 500ms
+  retry:
+    instances:
+      transactionProvider:
+        maxAttempts: 2
+        waitDuration: 50ms
+
+app:
+  provider:
+    connect-timeout: 800ms
+    read-timeout: 800ms
+  provider-executor:
+    future-timeout: 2s
