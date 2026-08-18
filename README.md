@@ -186,6 +186,37 @@ respuesta esperar, para poder usarla sin tener este README abierto en paralelo.
 
 Ambos requieren el header `X-API-Version` (opcional; por defecto `"1"` si se omite).
 
+## Documentación OpenAPI / Swagger
+
+La documentación de la API se genera automáticamente a partir de los controllers y
+DTOs reales (`springdoc-openapi`), en inglés. Con la app corriendo (`./gradlew
+bootRun`):
+
+| Recurso | URL |
+|---|---|
+| Swagger UI (interactiva) | http://localhost:8080/swagger-ui.html |
+| Spec en JSON | http://localhost:8080/v3/api-docs |
+| Spec en YAML | http://localhost:8080/v3/api-docs.yaml |
+
+Además, el spec queda versionado como archivo estático en [`docs/openapi.yaml`](docs/openapi.yaml)
+y [`docs/openapi.json`](docs/openapi.json) — útil para importarlo en otras
+herramientas (Postman, Redoc, etc.) sin tener la app corriendo. Para regenerarlo tras
+un cambio en los endpoints/DTOs:
+
+```bash
+./gradlew bootRun &
+sleep 5
+curl -s http://localhost:8080/v3/api-docs.yaml -o docs/openapi.yaml
+curl -s http://localhost:8080/v3/api-docs | python3 -m json.tool > docs/openapi.json
+kill %1
+```
+
+> No se usó el plugin de Gradle `org.springdoc.openapi-gradle-plugin` porque su
+> última versión (1.9.0) no se actualiza desde antes de Spring Boot 4.1/Spring
+> Framework 7 y agrega la complejidad de levantar la app completa (con Postgres real)
+> dentro del build. El export manual de arriba es más simple y confiable, y de todas
+> formas requiere el mismo prerequisito (la app corriendo).
+
 ## Uso de Inteligencia Artificial
 
 Se usó Claude (Anthropic) durante el desarrollo de este challenge para: generar

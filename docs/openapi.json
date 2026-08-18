@@ -1,0 +1,366 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "Transaction Execution API",
+        "description": "REST API for executing and querying financial transactions (credit/debit) against an external provider. Backend Challenge \u2014 Spin.",
+        "contact": {
+            "name": "Backend Challenge Submission"
+        },
+        "version": "1.0"
+    },
+    "servers": [
+        {
+            "url": "http://localhost:8080",
+            "description": "Generated server url"
+        }
+    ],
+    "tags": [
+        {
+            "name": "Transactions",
+            "description": "Execution and querying of financial transactions"
+        }
+    ],
+    "paths": {
+        "/transactions": {
+            "get": {
+                "tags": [
+                    "Transactions"
+                ],
+                "summary": "Queries transactions with filters and pagination",
+                "operationId": "query",
+                "parameters": [
+                    {
+                        "name": "accountId",
+                        "in": "query",
+                        "description": "Filter by account.",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "description": "Filter by transaction status.",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "EXECUTED",
+                                "REJECTED",
+                                "FAILED"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "type",
+                        "in": "query",
+                        "description": "Filter by transaction type.",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "CREDIT",
+                                "DEBIT"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "page",
+                        "in": "query",
+                        "description": "Page to query (0-indexed). Defaults to 0.",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "description": "Number of results per page. Defaults to 20, maximum 100.",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32"
+                        }
+                    },
+                    {
+                        "name": "X-API-Version",
+                        "in": "header",
+                        "schema": {
+                            "type": "string",
+                            "default": "1.0.0",
+                            "enum": [
+                                "1"
+                            ]
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/TransactionResponse"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "Transactions"
+                ],
+                "summary": "Executes a financial transaction",
+                "description": "Executes a CREDIT or DEBIT against the external provider. It is idempotent: retrying with the same Idempotency-Key and the same data returns the already EXECUTED/REJECTED transaction without calling the provider again; if the previous attempt ended up FAILED, it does retry against the provider, preserving the same transaction id.",
+                "operationId": "execute",
+                "parameters": [
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "description": "Unique key provided by the client to deduplicate retries of the same operation.",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "X-API-Version",
+                        "in": "header",
+                        "schema": {
+                            "type": "string",
+                            "default": "1.0.0",
+                            "enum": [
+                                "1"
+                            ]
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ExecuteTransactionRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "description": "Transaction processed. The body status can be EXECUTED or REJECTED (a provider rejection is a valid business outcome, not an HTTP error).",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TransactionResponse"
+                                },
+                                "examples": {
+                                    "EXECUTED": {
+                                        "summary": "The provider approved the transaction",
+                                        "description": "EXECUTED",
+                                        "value": {
+                                            "id": "8aefe9a9-2165-4d82-82f5-aef47a135929",
+                                            "accountId": "acc-1",
+                                            "type": "CREDIT",
+                                            "amount": 100.0,
+                                            "currency": "MXN",
+                                            "description": "example",
+                                            "status": "EXECUTED",
+                                            "providerTransactionId": "txn-qotioal1",
+                                            "balanceAfter": 600.0,
+                                            "createdAt": "2026-01-01T00:00:00Z"
+                                        }
+                                    },
+                                    "REJECTED": {
+                                        "summary": "The provider rejected the transaction (e.g. insufficient funds)",
+                                        "description": "REJECTED",
+                                        "value": {
+                                            "id": "3f8c9a2e-1b4d-4e9a-9c3f-2d5e6a7b8c9d",
+                                            "accountId": "acc-1",
+                                            "type": "DEBIT",
+                                            "amount": 9999999,
+                                            "currency": "MXN",
+                                            "description": "example",
+                                            "status": "REJECTED",
+                                            "createdAt": "2026-01-01T00:00:00Z"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request: amount out of range (INVALID_AMOUNT), DEBIT limit exceeded (DEBIT_LIMIT_EXCEEDED), unsupported currency (UNSUPPORTED_CURRENCY), invalid request body (VALIDATION_ERROR), or missing Idempotency-Key header (MISSING_HEADER).",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "The Idempotency-Key was already used with different transaction data (IDEMPOTENCY_KEY_CONFLICT).",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "It was not possible to communicate with the external provider, or the circuit breaker is open (PROVIDER_UNAVAILABLE).",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "504": {
+                        "description": "The external provider did not respond within the expected time, even after retries (PROVIDER_TIMEOUT).",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "ExecuteTransactionRequest": {
+                "type": "object",
+                "properties": {
+                    "accountId": {
+                        "type": "string",
+                        "description": "Identifier of the account the transaction is executed against.",
+                        "example": "acc-123",
+                        "minLength": 1
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "Type of transaction.",
+                        "enum": [
+                            "CREDIT",
+                            "DEBIT"
+                        ],
+                        "example": "CREDIT"
+                    },
+                    "amount": {
+                        "type": "number",
+                        "description": "Transaction amount. Must be greater than $1.00; DEBIT transactions additionally cannot exceed $10,000.00.",
+                        "example": 1500.0,
+                        "minimum": 0
+                    },
+                    "currency": {
+                        "type": "string",
+                        "description": "Transaction currency. Only MXN is currently supported.",
+                        "example": "MXN",
+                        "minLength": 1
+                    },
+                    "description": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "accountId",
+                    "amount",
+                    "currency",
+                    "type"
+                ]
+            },
+            "TransactionResponse": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "accountId": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "CREDIT",
+                            "DEBIT"
+                        ]
+                    },
+                    "amount": {
+                        "type": "number"
+                    },
+                    "currency": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Outcome of the transaction. EXECUTED and REJECTED are terminal; FAILED means the provider call did not complete and can be retried with the same Idempotency-Key.",
+                        "enum": [
+                            "EXECUTED",
+                            "REJECTED",
+                            "FAILED"
+                        ]
+                    },
+                    "providerTransactionId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Identifier assigned by the external provider. Present only when status is EXECUTED."
+                    },
+                    "balanceAfter": {
+                        "type": [
+                            "number",
+                            "null"
+                        ],
+                        "description": "Account balance after applying the transaction. Present only when status is EXECUTED."
+                    },
+                    "failureReason": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Reason the provider call failed. Present only when status is FAILED."
+                    },
+                    "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    }
+                }
+            },
+            "ErrorResponse": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Machine-readable error code.",
+                        "example": "INVALID_AMOUNT"
+                    },
+                    "message": {
+                        "type": "string"
+                    },
+                    "timestamp": {
+                        "type": "string",
+                        "format": "date-time"
+                    }
+                }
+            }
+        }
+    }
+}

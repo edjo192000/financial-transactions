@@ -41,6 +41,8 @@ dependencies {
     implementation("io.github.resilience4j:resilience4j-spring-boot3:2.3.0")
     implementation("org.springframework.boot:spring-boot-starter-aspectj")
 
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.0")
+
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
