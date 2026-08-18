@@ -7,3 +7,40 @@ spring:
 
 server:
   port: 8080
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      transactionProvider:
+        registerHealthIndicator: true
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 15s
+        permittedNumberOfCallsInHalfOpenState: 5
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        ignoreExceptions:
+          - com.financial.transactions.challenge.domain.exception.ProviderRejectedException
+  retry:
+    instances:
+      transactionProvider:
+        maxAttempts: 3
+        waitDuration: 500ms
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+        retryExceptions:
+          - com.financial.transactions.challenge.domain.exception.ProviderTimeoutException
+          - com.financial.transactions.challenge.domain.exception.ProviderCommunicationException
+        ignoreExceptions:
+          - com.financial.transactions.challenge.domain.exception.ProviderRejectedException
+
+app:
+  provider:
+    base-url: http://localhost:9090/provider
+    connect-timeout: 2s
+    read-timeout: 3s
+  provider-executor:
+    core-pool-size: 10
+    max-pool-size: 50
+    queue-capacity: 100
+    future-timeout: 5s

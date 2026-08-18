@@ -7,6 +7,7 @@ import com.financial.transactions.challenge.domain.TransactionStatus;
 import com.financial.transactions.challenge.domain.TransactionType;
 import com.financial.transactions.challenge.service.port.TransactionFilters;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
@@ -23,6 +24,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@DisplayName("JdbcTransactionRepository")
 class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
 
     @Autowired
@@ -52,10 +54,12 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
     }
 
     @Nested
+    @DisplayName("saving and retrieving by id")
     class SavingAndRetrievingById {
 
         @Test
-        void givenAnExecutedTransaction_whenSavedAndRetrieved_thenAllFieldsMatch() {
+        @DisplayName("Given an executed transaction, when saved and retrieved, then all fields match")
+        void savesAndRetrievesExecutedTransaction() {
             // given
             Transaction transaction = anExecutedTransaction("acc-123", TransactionType.CREDIT, new BigDecimal("1500.00"));
 
@@ -76,7 +80,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void givenNoTransactionExists_whenFindingById_thenReturnsEmpty() {
+        @DisplayName("Given no transaction exists, when finding by id, then returns empty")
+        void returnsEmptyWhenIdNotFound() {
             // given
             UUID nonExistentId = UUID.randomUUID();
 
@@ -88,7 +93,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void givenARejectedTransaction_whenSavedAndRetrieved_thenProviderFieldsAreNull() {
+        @DisplayName("Given a rejected transaction, when saved and retrieved, then provider fields are null")
+        void savesAndRetrievesRejectedTransactionWithNullProviderFields() {
             // given
             Transaction rejected = new Transaction(
                     UUID.randomUUID(),
@@ -116,10 +122,12 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
     }
 
     @Nested
+    @DisplayName("finding by idempotency key")
     class FindingByIdempotencyKey {
 
         @Test
-        void givenATransactionExists_whenFindingByItsIdempotencyKey_thenItIsFound() {
+        @DisplayName("Given a transaction exists, when finding by its idempotency key, then it is found")
+        void findsTransactionByItsKey() {
             // given
             Transaction transaction = anExecutedTransaction("acc-123", TransactionType.CREDIT, new BigDecimal("100.00"));
             repository.save(transaction);
@@ -133,7 +141,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void givenNoTransactionHasThatKey_whenFindingByIdempotencyKey_thenReturnsEmpty() {
+        @DisplayName("Given no transaction has that key, when finding by idempotency key, then returns empty")
+        void returnsEmptyWhenKeyNotFound() {
             // given
             String unusedKey = "non-existent-key";
 
@@ -145,7 +154,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void givenAnIdempotencyKeyAlreadyUsed_whenSavingAnotherTransactionWithIt_thenDatabaseRejectsIt() {
+        @DisplayName("Given an idempotency key already used, when saving another transaction with it, then the database rejects it")
+        void rejectsDuplicateKeyOnSave() {
             // given
             String sharedKey = "duplicate-key-" + UUID.randomUUID();
             Transaction first = new Transaction(
@@ -170,6 +180,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
     }
 
     @Nested
+    @DisplayName("filtering results")
     class FilteringResults {
 
         @BeforeEach
@@ -187,7 +198,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void whenFilteringByAccountId_thenOnlyThatAccountsTransactionsAreReturned() {
+        @DisplayName("Given transactions across accounts, when filtering by account id, then only that account's transactions are returned")
+        void filtersByAccountId() {
             // given
             TransactionFilters filters = TransactionFilters.of("acc-1", null, null, null, null);
 
@@ -200,7 +212,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void whenFilteringByStatus_thenOnlyTransactionsWithThatStatusAreReturned() {
+        @DisplayName("Given transactions with different statuses, when filtering by status, then only transactions with that status are returned")
+        void filtersByStatus() {
             // given
             TransactionFilters filters = TransactionFilters.of(null, TransactionStatus.REJECTED, null, null, null);
 
@@ -213,7 +226,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void whenFilteringByType_thenOnlyTransactionsOfThatTypeAreReturned() {
+        @DisplayName("Given transactions of different types, when filtering by type, then only transactions of that type are returned")
+        void filtersByType() {
             // given
             TransactionFilters filters = TransactionFilters.of(null, null, TransactionType.CREDIT, null, null);
 
@@ -226,7 +240,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void whenCombiningAccountStatusAndTypeFilters_thenOnlyMatchingTransactionIsReturned() {
+        @DisplayName("Given transactions across accounts, statuses and types, when combining account, status and type filters, then only the matching transaction is returned")
+        void combinesAccountStatusAndTypeFilters() {
             // given
             TransactionFilters filters = TransactionFilters.of("acc-1", TransactionStatus.EXECUTED,
                     TransactionType.DEBIT, null, null);
@@ -242,7 +257,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void givenAnAccountWithNoTransactions_whenFiltering_thenReturnsEmptyList() {
+        @DisplayName("Given an account with no transactions, when filtering, then returns an empty list")
+        void returnsEmptyListForAccountWithNoTransactions() {
             // given
             TransactionFilters filters = TransactionFilters.of("acc-nonexistent", null, null, null, null);
 
@@ -254,7 +270,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void givenNoFiltersApplied_whenFindingAll_thenReturnsEveryTransaction() {
+        @DisplayName("Given no filters applied, when finding all, then returns every transaction")
+        void returnsEveryTransactionWhenUnfiltered() {
             // given
             TransactionFilters filters = TransactionFilters.of(null, null, null, null, null);
 
@@ -267,6 +284,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
     }
 
     @Nested
+    @DisplayName("paginating results")
     class Paginating {
 
         @BeforeEach
@@ -277,7 +295,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void whenLimitIsTwo_thenOnlyTwoResultsAreReturned() {
+        @DisplayName("Given five transactions for the same account, when the limit is two, then only two results are returned")
+        void limitsResultsToPageSize() {
             // given
             TransactionFilters filters = TransactionFilters.of("acc-page", null, null, 0, 2);
 
@@ -289,7 +308,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void whenRequestingConsecutivePages_thenResultsDoNotOverlap() {
+        @DisplayName("Given five transactions for the same account, when requesting consecutive pages, then results do not overlap")
+        void consecutivePagesDoNotOverlap() {
             // given
             TransactionFilters firstPageFilter = TransactionFilters.of("acc-page", null, null, 0, 2);
             TransactionFilters secondPageFilter = TransactionFilters.of("acc-page", null, null, 1, 2);
@@ -305,7 +325,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         }
 
         @Test
-        void whenFindingAll_thenResultsAreOrderedByCreatedAtDescending() {
+        @DisplayName("Given five transactions for the same account, when finding all, then results are ordered by created date descending")
+        void ordersResultsByCreatedAtDescending() {
             // given
             TransactionFilters filters = TransactionFilters.of("acc-page", null, null, 0, 5);
 
