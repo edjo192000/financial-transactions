@@ -49,6 +49,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
                 TransactionStatus.EXECUTED,
                 "provider-txn-" + UUID.randomUUID(),
                 new BigDecimal("5500.00"),
+                null,
                 Instant.now()
         );
     }
@@ -106,6 +107,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
                     TransactionStatus.REJECTED,
                     null,
                     null,
+                    null,
                     Instant.now()
             );
 
@@ -118,6 +120,32 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
             assertThat(found.get().status()).isEqualTo(TransactionStatus.REJECTED);
             assertThat(found.get().providerTransactionId()).isNull();
             assertThat(found.get().balanceAfter()).isNull();
+        }
+
+        @Test
+        @DisplayName("Given a failed transaction, when saved and retrieved, then the failure reason is preserved")
+        void savesAndRetrievesFailedTransactionWithFailureReason() {
+            // given
+            Transaction failed = Transaction.failed(
+                    "idem-" + UUID.randomUUID(),
+                    "acc-789",
+                    TransactionType.DEBIT,
+                    new Money(new BigDecimal("75.00"), "MXN"),
+                    "Failed test",
+                    "Provider timed out",
+                    Instant.now()
+            );
+
+            // when
+            repository.save(failed);
+            Optional<Transaction> found = repository.findById(failed.id());
+
+            // then
+            assertThat(found).isPresent();
+            assertThat(found.get().status()).isEqualTo(TransactionStatus.FAILED);
+            assertThat(found.get().providerTransactionId()).isNull();
+            assertThat(found.get().balanceAfter()).isNull();
+            assertThat(found.get().failureReason()).isEqualTo("Provider timed out");
         }
     }
 
@@ -161,12 +189,12 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
             Transaction first = new Transaction(
                     UUID.randomUUID(), sharedKey, "acc-123", TransactionType.CREDIT,
                     new Money(new BigDecimal("100.00"), "MXN"), "First", TransactionStatus.EXECUTED,
-                    "provider-1", new BigDecimal("100.00"), Instant.now()
+                    "provider-1", new BigDecimal("100.00"), null, Instant.now()
             );
             Transaction duplicate = new Transaction(
                     UUID.randomUUID(), sharedKey, "acc-123", TransactionType.CREDIT,
                     new Money(new BigDecimal("200.00"), "MXN"), "Duplicate", TransactionStatus.EXECUTED,
-                    "provider-2", new BigDecimal("300.00"), Instant.now()
+                    "provider-2", new BigDecimal("300.00"), null, Instant.now()
             );
             repository.save(first);
 
@@ -192,7 +220,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
             Transaction rejected = new Transaction(
                     UUID.randomUUID(), "idem-" + UUID.randomUUID(), "acc-1", TransactionType.DEBIT,
                     new Money(new BigDecimal("20.00"), "MXN"), "Rejected", TransactionStatus.REJECTED,
-                    null, null, Instant.now()
+                    null, null, null, Instant.now()
             );
             repository.save(rejected);
         }

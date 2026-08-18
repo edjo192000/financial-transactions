@@ -31,9 +31,9 @@ public class JdbcTransactionRepository implements TransactionRepository {
     public Transaction save(Transaction tx) {
         jdbcClient.sql("""
                 INSERT INTO transactions (id, idempotency_key, account_id, type, amount, currency,
-                    description, status, provider_transaction_id, balance_after, created_at)
+                    description, status, provider_transaction_id, balance_after, failure_reason, created_at)
                 VALUES (:id, :idempotencyKey, :accountId, :type, :amount, :currency,
-                    :description, :status, :providerTransactionId, :balanceAfter, :createdAt)
+                    :description, :status, :providerTransactionId, :balanceAfter, :failureReason, :createdAt)
                 """)
                 .param("id", tx.id())
                 .param("idempotencyKey", tx.idempotencyKey())
@@ -45,6 +45,7 @@ public class JdbcTransactionRepository implements TransactionRepository {
                 .param("status", tx.status().name())
                 .param("providerTransactionId", tx.providerTransactionId())
                 .param("balanceAfter", tx.balanceAfter())
+                .param("failureReason", tx.failureReason())
                 .param("createdAt", Timestamp.from(tx.createdAt()))
                 .update();
 
@@ -117,6 +118,7 @@ public class JdbcTransactionRepository implements TransactionRepository {
                 TransactionStatus.valueOf(rs.getString("status")),
                 rs.getString("provider_transaction_id"),
                 balanceAfter,
+                rs.getString("failure_reason"),
                 rs.getTimestamp("created_at").toInstant()
         );
     }
