@@ -3,6 +3,7 @@ package com.financial.transactions.challenge.service;
 import com.financial.transactions.challenge.domain.Money;
 import com.financial.transactions.challenge.domain.Transaction;
 import com.financial.transactions.challenge.domain.TransactionRules;
+import com.financial.transactions.challenge.domain.TransactionStatus;
 import com.financial.transactions.challenge.domain.exception.IdempotencyKeyConflictException;
 import com.financial.transactions.challenge.domain.exception.ProviderCommunicationException;
 import com.financial.transactions.challenge.domain.exception.ProviderRejectedException;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 public class ExecuteTransactionService {
@@ -35,18 +37,18 @@ public class ExecuteTransactionService {
         Optional<Transaction> existing = repository.findByIdempotencyKey(command.idempotencyKey());
 
         if (existing.isPresent()) {
-            return reuseOrFailOnConflict(existing.get(), command);
+            return handleExistingTransaction(existing.get(), command);
         }
 
         Money money = Money.of(command.amount(), command.currency());
         TransactionRules.validate(command.type(), money);
 
-        Transaction result = callProviderAndBuildResult(command, money);
+        Transaction result = callProviderAndBuildResult(command, money, UUID.randomUUID());
 
         return repository.save(result);
     }
 
-    private Transaction reuseOrFailOnConflict(Transaction existing, ExecuteTransactionCommand command) {
+    private Transaction handleExistingTransaction(Transaction existing, ExecuteTransactionCommand command) {
         Money requestedMoney = Money.of(command.amount(), command.currency());
 
         boolean matches = existing.matchesRequest(
@@ -58,33 +60,38 @@ public class ExecuteTransactionService {
                             + "' was already used with different transaction data");
         }
 
-        return existing;
+        if (existing.status() != TransactionStatus.FAILED) {
+            return existing;
+        }
+
+        Transaction retried = callProviderAndBuildResult(command, requestedMoney, existing.id());
+        return repository.save(retried);
     }
 
-    private Transaction callProviderAndBuildResult(ExecuteTransactionCommand command, Money money) {
+    private Transaction callProviderAndBuildResult(ExecuteTransactionCommand command, Money money, UUID id) {
         Instant now = Instant.now(clock);
 
         try {
             ProviderResult providerResult = provider.execute(command.accountId(), command.type(), money);
 
             return Transaction.executed(
-                    command.idempotencyKey(), command.accountId(), command.type(), money,
+                    id, command.idempotencyKey(), command.accountId(), command.type(), money,
                     command.description(), providerResult.providerTransactionId(), providerResult.balanceAfter(), now
             );
 
         } catch (ProviderRejectedException e) {
             return Transaction.rejected(
-                    command.idempotencyKey(), command.accountId(), command.type(), money,
+                    id, command.idempotencyKey(), command.accountId(), command.type(), money,
                     command.description(), now
             );
 
         } catch (ProviderTimeoutException | ProviderCommunicationException e) {
-            return Transaction.failed(
-                    command.idempotencyKey(), command.accountId(), command.type(), money,
+            Transaction failedTransaction = Transaction.failed(
+                    id, command.idempotencyKey(), command.accountId(), command.type(), money,
                     command.description(), e.getMessage(), now
             );
+            repository.save(failedTransaction);
+            throw e;
         }
     }
-
-
 }

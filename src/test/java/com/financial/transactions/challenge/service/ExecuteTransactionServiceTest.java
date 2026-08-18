@@ -101,8 +101,8 @@ class ExecuteTransactionServiceTest {
         }
 
         @Test
-        @DisplayName("Given a transaction already exists with that idempotency key and the same data, when executing, then it returns the existing transaction without calling the provider or saving again")
-        void returnsExistingWithoutSideEffects() {
+        @DisplayName("Given a transaction already exists with that idempotency key and status EXECUTED, when executing, then it returns the existing transaction without calling the provider or saving again")
+        void returnsExecutedWithoutSideEffects() {
             // given
             Transaction existing = Transaction.executed(
                     IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT, Money.of(AMOUNT, CURRENCY),
@@ -119,6 +119,95 @@ class ExecuteTransactionServiceTest {
             assertThat(result).isEqualTo(existing);
             verify(provider, never()).execute(any(), any(), any());
             verify(repository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Given a transaction already exists with that idempotency key and status REJECTED, when executing, then it returns the existing transaction without calling the provider or saving again")
+        void returnsRejectedWithoutSideEffects() {
+            // given
+            Transaction existing = Transaction.rejected(
+                    IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT, Money.of(AMOUNT, CURRENCY),
+                    DESCRIPTION, FIXED_INSTANT
+            );
+            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.of(existing));
+
+            ExecuteTransactionCommand command = aValidCommand();
+
+            // when
+            Transaction result = service.execute(command);
+
+            // then
+            assertThat(result).isEqualTo(existing);
+            verify(provider, never()).execute(any(), any(), any());
+            verify(repository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Given a transaction already exists with that idempotency key and status FAILED, when executing, then the provider is invoked again")
+        void retriesProviderForFailedTransaction() {
+            // given
+            Transaction existing = Transaction.failed(
+                    IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT, Money.of(AMOUNT, CURRENCY),
+                    DESCRIPTION, "Provider did not respond within the socket timeout", FIXED_INSTANT
+            );
+            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.of(existing));
+            when(provider.execute(any(), any(), any())).thenReturn(aProviderResult());
+            when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+            ExecuteTransactionCommand command = aValidCommand();
+
+            // when
+            service.execute(command);
+
+            // then
+            verify(provider, times(1)).execute(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Given a FAILED transaction exists and the retry succeeds, when executing, then the resulting Transaction has status EXECUTED and the same id as the original FAILED transaction")
+        void preservesIdWhenRetrySucceeds() {
+            // given
+            Transaction existing = Transaction.failed(
+                    IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT, Money.of(AMOUNT, CURRENCY),
+                    DESCRIPTION, "Provider did not respond within the socket timeout", FIXED_INSTANT
+            );
+            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.of(existing));
+            when(provider.execute(any(), any(), any())).thenReturn(aProviderResult());
+            when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+            ExecuteTransactionCommand command = aValidCommand();
+
+            // when
+            Transaction result = service.execute(command);
+
+            // then
+            assertThat(result.status()).isEqualTo(TransactionStatus.EXECUTED);
+            assertThat(result.id()).isEqualTo(existing.id());
+        }
+
+        @Test
+        @DisplayName("Given a FAILED transaction exists and the retry fails again, when executing, then the exception propagates and repository.save is called with a Transaction preserving the original id")
+        void preservesIdWhenRetryFailsAgain() {
+            // given
+            Transaction existing = Transaction.failed(
+                    IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT, Money.of(AMOUNT, CURRENCY),
+                    DESCRIPTION, "Provider did not respond within the socket timeout", FIXED_INSTANT
+            );
+            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.of(existing));
+            when(provider.execute(any(), any(), any()))
+                    .thenThrow(new ProviderTimeoutException("Provider did not respond within the socket timeout"));
+            ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
+            when(repository.save(captor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+            ExecuteTransactionCommand command = aValidCommand();
+
+            // when
+            // then
+            assertThatThrownBy(() -> service.execute(command))
+                    .isInstanceOf(ProviderTimeoutException.class);
+
+            assertThat(captor.getValue().status()).isEqualTo(TransactionStatus.FAILED);
+            assertThat(captor.getValue().id()).isEqualTo(existing.id());
         }
 
         @Test
@@ -307,8 +396,8 @@ class ExecuteTransactionServiceTest {
         }
 
         @Test
-        @DisplayName("Given the provider throws ProviderTimeoutException, when executing, then the persisted Transaction has status FAILED with a populated failureReason")
-        void persistsFailedTransactionOnTimeout() {
+        @DisplayName("Given the provider throws ProviderTimeoutException, when executing, then it saves a FAILED transaction with a populated failureReason and re-throws the exception")
+        void savesFailedTransactionAndRethrowsOnTimeout() {
             // given
             when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
             when(provider.execute(any(), any(), any()))
@@ -319,9 +408,11 @@ class ExecuteTransactionServiceTest {
             ExecuteTransactionCommand command = aValidCommand();
 
             // when
-            service.execute(command);
-
             // then
+            assertThatThrownBy(() -> service.execute(command))
+                    .isInstanceOf(ProviderTimeoutException.class);
+
+            verify(repository, times(1)).save(any());
             Transaction saved = captor.getValue();
             assertThat(saved.status()).isEqualTo(TransactionStatus.FAILED);
             assertThat(saved.failureReason()).isEqualTo("Provider did not respond within the socket timeout");
@@ -330,8 +421,8 @@ class ExecuteTransactionServiceTest {
         }
 
         @Test
-        @DisplayName("Given the provider throws ProviderCommunicationException, when executing, then the persisted Transaction has status FAILED with a populated failureReason")
-        void persistsFailedTransactionOnCommunicationFailure() {
+        @DisplayName("Given the provider throws ProviderCommunicationException, when executing, then it saves a FAILED transaction with a populated failureReason and re-throws the exception")
+        void savesFailedTransactionAndRethrowsOnCommunicationFailure() {
             // given
             when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
             when(provider.execute(any(), any(), any()))
@@ -342,9 +433,11 @@ class ExecuteTransactionServiceTest {
             ExecuteTransactionCommand command = aValidCommand();
 
             // when
-            service.execute(command);
-
             // then
+            assertThatThrownBy(() -> service.execute(command))
+                    .isInstanceOf(ProviderCommunicationException.class);
+
+            verify(repository, times(1)).save(any());
             Transaction saved = captor.getValue();
             assertThat(saved.status()).isEqualTo(TransactionStatus.FAILED);
             assertThat(saved.failureReason()).isEqualTo("Circuit breaker is open for the transaction provider");

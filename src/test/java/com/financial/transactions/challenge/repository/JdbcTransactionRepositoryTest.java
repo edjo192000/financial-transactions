@@ -17,6 +17,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -146,6 +147,53 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
             assertThat(found.get().providerTransactionId()).isNull();
             assertThat(found.get().balanceAfter()).isNull();
             assertThat(found.get().failureReason()).isEqualTo("Provider timed out");
+        }
+
+        @Test
+        @DisplayName("Given a saved FAILED transaction, when saving again with the same id but status EXECUTED, then findById returns the updated version and created_at is preserved")
+        void upsertsSameIdFromFailedToExecuted() {
+            // given
+            Instant originalCreatedAt = Instant.now().minusSeconds(60).truncatedTo(ChronoUnit.MICROS);
+            Transaction failed = new Transaction(
+                    UUID.randomUUID(),
+                    "idem-" + UUID.randomUUID(),
+                    "acc-999",
+                    TransactionType.DEBIT,
+                    new Money(new BigDecimal("80.00"), "MXN"),
+                    "Retry test",
+                    TransactionStatus.FAILED,
+                    null,
+                    null,
+                    "Provider timed out",
+                    originalCreatedAt
+            );
+            repository.save(failed);
+
+            Transaction executed = new Transaction(
+                    failed.id(),
+                    failed.idempotencyKey(),
+                    failed.accountId(),
+                    failed.type(),
+                    failed.money(),
+                    failed.description(),
+                    TransactionStatus.EXECUTED,
+                    "provider-txn-retry",
+                    new BigDecimal("920.00"),
+                    null,
+                    Instant.now()
+            );
+
+            // when
+            repository.save(executed);
+            Optional<Transaction> found = repository.findById(failed.id());
+
+            // then
+            assertThat(found).isPresent();
+            assertThat(found.get().status()).isEqualTo(TransactionStatus.EXECUTED);
+            assertThat(found.get().providerTransactionId()).isEqualTo("provider-txn-retry");
+            assertThat(found.get().balanceAfter()).isEqualByComparingTo("920.00");
+            assertThat(found.get().failureReason()).isNull();
+            assertThat(found.get().createdAt()).isEqualTo(originalCreatedAt);
         }
     }
 

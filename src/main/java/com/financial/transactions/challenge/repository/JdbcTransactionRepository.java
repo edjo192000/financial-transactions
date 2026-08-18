@@ -34,6 +34,11 @@ public class JdbcTransactionRepository implements TransactionRepository {
                     description, status, provider_transaction_id, balance_after, failure_reason, created_at)
                 VALUES (:id, :idempotencyKey, :accountId, :type, :amount, :currency,
                     :description, :status, :providerTransactionId, :balanceAfter, :failureReason, :createdAt)
+                ON CONFLICT (id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    provider_transaction_id = EXCLUDED.provider_transaction_id,
+                    balance_after = EXCLUDED.balance_after,
+                    failure_reason = EXCLUDED.failure_reason
                 """)
                 .param("id", tx.id())
                 .param("idempotencyKey", tx.idempotencyKey())

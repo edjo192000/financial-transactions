@@ -19,29 +19,47 @@ public record Transaction(
         Instant createdAt
 ) {
 
-    public static Transaction executed(String idempotencyKey, String accountId, TransactionType type,
+    public static Transaction executed(UUID id, String idempotencyKey, String accountId, TransactionType type,
                                        Money money, String description, String providerTransactionId,
                                        BigDecimal balanceAfter, Instant createdAt) {
         return new Transaction(
-                UUID.randomUUID(), idempotencyKey, accountId, type, money, description,
-                TransactionStatus.EXECUTED, providerTransactionId, balanceAfter,null, createdAt
+                id, idempotencyKey, accountId, type, money, description,
+                TransactionStatus.EXECUTED, providerTransactionId, balanceAfter, null, createdAt
+        );
+    }
+
+    public static Transaction executed(String idempotencyKey, String accountId, TransactionType type,
+                                       Money money, String description, String providerTransactionId,
+                                       BigDecimal balanceAfter, Instant createdAt) {
+        return executed(UUID.randomUUID(), idempotencyKey, accountId, type, money, description,
+                providerTransactionId, balanceAfter, createdAt);
+    }
+
+    public static Transaction rejected(UUID id, String idempotencyKey, String accountId, TransactionType type,
+                                       Money money, String description, Instant createdAt) {
+        return new Transaction(
+                id, idempotencyKey, accountId, type, money, description,
+                TransactionStatus.REJECTED, null, null, null, createdAt
         );
     }
 
     public static Transaction rejected(String idempotencyKey, String accountId, TransactionType type,
                                        Money money, String description, Instant createdAt) {
+        return rejected(UUID.randomUUID(), idempotencyKey, accountId, type, money, description, createdAt);
+    }
+
+    public static Transaction failed(UUID id, String idempotencyKey, String accountId, TransactionType type,
+                                     Money money, String description, String failureReason, Instant createdAt) {
         return new Transaction(
-                UUID.randomUUID(), idempotencyKey, accountId, type, money, description,
-                TransactionStatus.REJECTED, null, null,null, createdAt
+                id, idempotencyKey, accountId, type, money, description,
+                TransactionStatus.FAILED, null, null, failureReason, createdAt
         );
     }
 
     public static Transaction failed(String idempotencyKey, String accountId, TransactionType type,
                                      Money money, String description, String failureReason, Instant createdAt) {
-        return new Transaction(
-                UUID.randomUUID(), idempotencyKey, accountId, type, money, description,
-                TransactionStatus.FAILED, null, null, failureReason, createdAt
-        );
+        return failed(UUID.randomUUID(), idempotencyKey, accountId, type, money, description,
+                failureReason, createdAt);
     }
 
     public boolean matchesRequest(String accountId, TransactionType type, Money money, String description) {
