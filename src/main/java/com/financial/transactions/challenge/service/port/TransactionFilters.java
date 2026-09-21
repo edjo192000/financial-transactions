@@ -7,6 +7,7 @@ public record TransactionFilters(
         String accountId,
         TransactionStatus status,
         TransactionType type,
+        String idempotencyKey,
         int page,
         int limit
 ) {
@@ -28,11 +29,13 @@ public record TransactionFilters(
     }
 
     public static TransactionFilters of(String accountId, TransactionStatus status,
-                                        TransactionType type, Integer page, Integer limit) {
+                                        TransactionType type, String idempotencyKey,
+                                        Integer page, Integer limit) {
         return new TransactionFilters(
                 accountId,
                 status,
                 type,
+                idempotencyKey,
                 page != null ? page : DEFAULT_PAGE,
                 limit != null ? limit : DEFAULT_LIMIT
         );

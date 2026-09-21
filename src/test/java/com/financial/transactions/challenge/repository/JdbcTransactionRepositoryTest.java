@@ -18,9 +18,14 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -198,6 +203,95 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
     }
 
     @Nested
+    @DisplayName("reserving a new idempotency key")
+    class ReservingANewIdempotencyKey {
+
+        @Test
+        @DisplayName("Given no reservation exists for a key, when calling tryReserve, then it wins and a PENDING row is persisted")
+        void winsReservationAndPersistsPendingRow() {
+            // given
+            Transaction pending = Transaction.pending(
+                    UUID.randomUUID(), "idem-" + UUID.randomUUID(), "acc-pending", TransactionType.CREDIT,
+                    new Money(new BigDecimal("40.00"), "MXN"), "Pending test", Instant.now());
+
+            // when
+            boolean won = repository.tryReserve(pending);
+
+            // then
+            assertThat(won).isTrue();
+            Optional<Transaction> found = repository.findById(pending.id());
+            assertThat(found).isPresent();
+            assertThat(found.get().status()).isEqualTo(TransactionStatus.PENDING);
+            assertThat(found.get().providerTransactionId()).isNull();
+            assertThat(found.get().balanceAfter()).isNull();
+        }
+
+        @Test
+        @DisplayName("Given a reservation already exists for a key, when calling tryReserve again with the same key, then it loses and the original row is left untouched")
+        void losesReservationWhenKeyAlreadyClaimed() {
+            // given
+            String sharedKey = "idem-" + UUID.randomUUID();
+            Transaction firstAttempt = Transaction.pending(
+                    UUID.randomUUID(), sharedKey, "acc-race", TransactionType.CREDIT,
+                    new Money(new BigDecimal("40.00"), "MXN"), "First attempt", Instant.now());
+            Transaction secondAttempt = Transaction.pending(
+                    UUID.randomUUID(), sharedKey, "acc-race", TransactionType.CREDIT,
+                    new Money(new BigDecimal("40.00"), "MXN"), "Second attempt", Instant.now());
+
+            // when
+            boolean firstWon = repository.tryReserve(firstAttempt);
+            boolean secondWon = repository.tryReserve(secondAttempt);
+
+            // then
+            assertThat(firstWon).isTrue();
+            assertThat(secondWon).isFalse();
+            // exactly one row exists for this key, and it's the winner's — the loser's attempt
+            // left no trace, proving the database's unique constraint is the actual arbiter
+            Optional<Transaction> stored = repository.findByIdempotencyKey(sharedKey);
+            assertThat(stored).isPresent();
+            assertThat(stored.get().id()).isEqualTo(firstAttempt.id());
+        }
+
+        @Test
+        @DisplayName("Given N threads race to reserve the exact same new idempotency key concurrently, when all of them call tryReserve, then exactly one wins — proving the database's unique constraint, not application code, is the actual mutual-exclusion mechanism")
+        void exactlyOneThreadWinsUnderRealConcurrency() throws InterruptedException {
+            // given
+            String sharedKey = "idem-race-" + UUID.randomUUID();
+            int threadCount = 8;
+            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch startingGate = new CountDownLatch(1);
+            List<Future<Boolean>> results = new ArrayList<>();
+
+            for (int i = 0; i < threadCount; i++) {
+                Transaction attempt = Transaction.pending(
+                        UUID.randomUUID(), sharedKey, "acc-race-concurrent", TransactionType.CREDIT,
+                        new Money(new BigDecimal("40.00"), "MXN"), "Concurrent attempt", Instant.now());
+                results.add(executor.submit(() -> {
+                    startingGate.await();
+                    return repository.tryReserve(attempt);
+                }));
+            }
+
+            // when — release every thread at once so they hit the database as concurrently as possible
+            startingGate.countDown();
+            long winners = results.stream()
+                    .map(future -> {
+                        try {
+                            return future.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    })
+                    .filter(Boolean::booleanValue)
+                    .count();
+            executor.shutdown();
+
+            // then
+            assertThat(winners).isEqualTo(1);
+        }
+    }
+
+    @Nested
     @DisplayName("finding by idempotency key")
     class FindingByIdempotencyKey {
 
@@ -277,7 +371,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         @DisplayName("Given transactions across accounts, when filtering by account id, then only that account's transactions are returned")
         void filtersByAccountId() {
             // given
-            TransactionFilters filters = TransactionFilters.of("acc-1", null, null, null, null);
+            TransactionFilters filters = TransactionFilters.of("acc-1", null, null, null, null, null);
 
             // when
             List<Transaction> results = repository.findAll(filters);
@@ -291,7 +385,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         @DisplayName("Given transactions with different statuses, when filtering by status, then only transactions with that status are returned")
         void filtersByStatus() {
             // given
-            TransactionFilters filters = TransactionFilters.of(null, TransactionStatus.REJECTED, null, null, null);
+            TransactionFilters filters = TransactionFilters.of(null, TransactionStatus.REJECTED, null, null, null, null);
 
             // when
             List<Transaction> results = repository.findAll(filters);
@@ -305,7 +399,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         @DisplayName("Given transactions of different types, when filtering by type, then only transactions of that type are returned")
         void filtersByType() {
             // given
-            TransactionFilters filters = TransactionFilters.of(null, null, TransactionType.CREDIT, null, null);
+            TransactionFilters filters = TransactionFilters.of(null, null, TransactionType.CREDIT, null, null, null);
 
             // when
             List<Transaction> results = repository.findAll(filters);
@@ -320,7 +414,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         void combinesAccountStatusAndTypeFilters() {
             // given
             TransactionFilters filters = TransactionFilters.of("acc-1", TransactionStatus.EXECUTED,
-                    TransactionType.DEBIT, null, null);
+                    TransactionType.DEBIT, null, null, null);
 
             // when
             List<Transaction> results = repository.findAll(filters);
@@ -336,7 +430,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         @DisplayName("Given an account with no transactions, when filtering, then returns an empty list")
         void returnsEmptyListForAccountWithNoTransactions() {
             // given
-            TransactionFilters filters = TransactionFilters.of("acc-nonexistent", null, null, null, null);
+            TransactionFilters filters = TransactionFilters.of("acc-nonexistent", null, null, null, null, null);
 
             // when
             List<Transaction> results = repository.findAll(filters);
@@ -349,7 +443,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         @DisplayName("Given no filters applied, when finding all, then returns every transaction")
         void returnsEveryTransactionWhenUnfiltered() {
             // given
-            TransactionFilters filters = TransactionFilters.of(null, null, null, null, null);
+            TransactionFilters filters = TransactionFilters.of(null, null, null, null, null, null);
 
             // when
             List<Transaction> results = repository.findAll(filters);
@@ -374,7 +468,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         @DisplayName("Given five transactions for the same account, when the limit is two, then only two results are returned")
         void limitsResultsToPageSize() {
             // given
-            TransactionFilters filters = TransactionFilters.of("acc-page", null, null, 0, 2);
+            TransactionFilters filters = TransactionFilters.of("acc-page", null, null, null, 0, 2);
 
             // when
             List<Transaction> results = repository.findAll(filters);
@@ -387,8 +481,8 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         @DisplayName("Given five transactions for the same account, when requesting consecutive pages, then results do not overlap")
         void consecutivePagesDoNotOverlap() {
             // given
-            TransactionFilters firstPageFilter = TransactionFilters.of("acc-page", null, null, 0, 2);
-            TransactionFilters secondPageFilter = TransactionFilters.of("acc-page", null, null, 1, 2);
+            TransactionFilters firstPageFilter = TransactionFilters.of("acc-page", null, null, null, 0, 2);
+            TransactionFilters secondPageFilter = TransactionFilters.of("acc-page", null, null, null, 1, 2);
 
             // when
             List<Transaction> firstPage = repository.findAll(firstPageFilter);
@@ -404,7 +498,7 @@ class JdbcTransactionRepositoryTest extends AbstractIntegrationTest {
         @DisplayName("Given five transactions for the same account, when finding all, then results are ordered by created date descending")
         void ordersResultsByCreatedAtDescending() {
             // given
-            TransactionFilters filters = TransactionFilters.of("acc-page", null, null, 0, 5);
+            TransactionFilters filters = TransactionFilters.of("acc-page", null, null, null, 0, 5);
 
             // when
             List<Transaction> results = repository.findAll(filters);

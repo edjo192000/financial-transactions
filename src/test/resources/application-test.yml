@@ -15,3 +15,6 @@ app:
     read-timeout: 800ms
   provider-executor:
     future-timeout: 2s
+  idempotency:
+    poll-interval: 20ms
+    poll-attempts: 3

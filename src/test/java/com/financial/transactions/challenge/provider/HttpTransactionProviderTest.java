@@ -19,6 +19,7 @@ import org.springframework.context.annotation.Configuration;
 import java.math.BigDecimal;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
@@ -70,12 +71,13 @@ class HttpTransactionProviderTest {
                             """)));
 
             // when
-            ProviderResult result = provider.execute("acc-1", TransactionType.CREDIT, new Money(new BigDecimal("10.00"), "MXN"));
+            ProviderResult result = provider.execute("idem-1", "acc-1", TransactionType.CREDIT, new Money(new BigDecimal("10.00"), "MXN"));
 
             // then
             assertThat(result.providerTransactionId()).isEqualTo("prov-1");
             assertThat(result.balanceAfter()).isEqualByComparingTo("100.00");
-            wireMock.verify(1, postRequestedFor(urlEqualTo("/provider/v1/execute")));
+            wireMock.verify(1, postRequestedFor(urlEqualTo("/provider/v1/execute"))
+                    .withHeader("Idempotency-Key", equalTo("idem-1")));
         }
     }
 
@@ -122,7 +124,7 @@ class HttpTransactionProviderTest {
                             """)));
 
             // when
-            ProviderResult result = provider.execute("acc-2", TransactionType.DEBIT, new Money(new BigDecimal("20.00"), "MXN"));
+            ProviderResult result = provider.execute("idem-2", "acc-2", TransactionType.DEBIT, new Money(new BigDecimal("20.00"), "MXN"));
 
             // then
             assertThat(result.providerTransactionId()).isEqualTo("prov-2");
@@ -138,7 +140,7 @@ class HttpTransactionProviderTest {
 
             // when
             Throwable thrown = catchThrowable(() ->
-                    provider.execute("acc-3", TransactionType.CREDIT, new Money(new BigDecimal("30.00"), "MXN")));
+                    provider.execute("idem-3", "acc-3", TransactionType.CREDIT, new Money(new BigDecimal("30.00"), "MXN")));
 
             // then
             assertThat(thrown).isInstanceOf(ProviderCommunicationException.class);
@@ -178,7 +180,7 @@ class HttpTransactionProviderTest {
 
             // when
             Throwable thrown = catchThrowable(() ->
-                    provider.execute("acc-4", TransactionType.DEBIT, new Money(new BigDecimal("1000.00"), "MXN")));
+                    provider.execute("idem-4", "acc-4", TransactionType.DEBIT, new Money(new BigDecimal("1000.00"), "MXN")));
 
             // then
             assertThat(thrown).isInstanceOf(ProviderRejectedException.class);

@@ -62,6 +62,14 @@ public record Transaction(
                 failureReason, createdAt);
     }
 
+    public static Transaction pending(UUID id, String idempotencyKey, String accountId, TransactionType type,
+                                      Money money, String description, Instant createdAt) {
+        return new Transaction(
+                id, idempotencyKey, accountId, type, money, description,
+                TransactionStatus.PENDING, null, null, null, createdAt
+        );
+    }
+
     public boolean matchesRequest(String accountId, TransactionType type, Money money, String description) {
         return this.accountId.equals(accountId)
                 && this.type == type

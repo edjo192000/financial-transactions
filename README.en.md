@@ -58,6 +58,24 @@ Resilience4j directly. `controller` depends on `service`, never the other way ar
   provider) is **not** terminal: a retry with the same key genuinely calls the provider
   again, updating the same record via `upsert` (`ON CONFLICT (id)`) — same `id`, same
   `created_at`, status and provider data updated.
+- **Idempotency under real concurrency (atomic reservation, not check-then-act)**: two
+  concurrent requests with the same new `Idempotency-Key` can no longer both call the
+  provider. Before calling it, the key is reserved with
+  `INSERT ... ON CONFLICT (idempotency_key) DO NOTHING` against a `PENDING` row — it's
+  PostgreSQL's `UNIQUE` constraint, not application code, that decides which request
+  wins. The loser polls, bounded (`app.idempotency.poll-interval` ×
+  `poll-attempts`, ~450ms by default), waiting for the winner to resolve it; if the
+  budget runs out, it responds `202 Accepted` with
+  `Location: /transactions?idempotencyKey=...` instead of either blocking the Tomcat
+  thread indefinitely or guessing at an outcome. The same `PENDING` row, written
+  *before* the provider is ever called, also bounds the provider-vs-database
+  consistency gap: if the final `save()` fails after a successful provider call, a
+  durable trace (`PENDING`) survives for reconciliation instead of a silent total loss.
+- **The same `Idempotency-Key` is forwarded to the external provider**: both
+  Resilience4j's own automatic retries and our own retry of a `FAILED` transaction send
+  the same `Idempotency-Key` header on the outbound call. If the provider recognizes it,
+  it avoids executing an operation twice when the first attempt's outcome was left
+  ambiguous (a timeout with no way to know whether the provider actually processed it).
 - **Resilience across 4 layers**, all externalized in `application.yml` (nothing
   hardcoded):
   1. **Socket** — the `RestClient`'s connect/read timeout (`app.provider.connect-timeout`,

@@ -19,9 +19,10 @@ public class HttpTransactionProvider implements TransactionProvider {
     }
 
     @Override
-    public ProviderResult execute(String accountId, TransactionType type, Money money) {
+    public ProviderResult execute(String idempotencyKey, String accountId, TransactionType type, Money money) {
         try {
-            ProviderExecuteResponse response = resilientProviderClient.execute(accountId, type, money);
+            ProviderExecuteResponse response =
+                    resilientProviderClient.execute(idempotencyKey, accountId, type, money);
             return new ProviderResult(response.transactionId(), response.balance(), response.executedAt());
         } catch (CallNotPermittedException e) {
             throw new ProviderCommunicationException("Circuit breaker is open for the transaction provider", e);
