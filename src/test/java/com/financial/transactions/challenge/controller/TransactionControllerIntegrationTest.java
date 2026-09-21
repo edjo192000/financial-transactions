@@ -25,6 +25,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
@@ -365,6 +371,76 @@ class TransactionControllerIntegrationTest extends AbstractControllerIntegration
             // then
             assertThat(retry.getResponse().getStatus()).isEqualTo(201);
             assertThat(extractId(retry)).isEqualTo(originalId);
+        }
+    }
+
+    @Nested
+    @DisplayName("Concurrent requests with a new idempotency key")
+    class ConcurrentIdempotencyKeyRequests {
+
+        @Test
+        @DisplayName("GIVEN two concurrent POSTs with the same new Idempotency-Key, WHEN both are submitted at once, THEN the provider is called exactly once and both responses are a successful outcome")
+        void callsProviderExactlyOnceUnderRealConcurrency() throws Exception {
+            // given
+            stubProviderApproves("prov-race", new BigDecimal("650.00"));
+            String idempotencyKey = newIdempotencyKey();
+            String body = requestJson("acc-race", TransactionType.CREDIT, new BigDecimal("100.00"), DEFAULT_CURRENCY, "Test");
+
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            CountDownLatch startingGate = new CountDownLatch(1);
+            Callable<MvcResult> task = () -> {
+                startingGate.await();
+                return postTransaction(idempotencyKey, body);
+            };
+
+            // when — submit both before releasing the gate, so they hit the endpoint as
+            // concurrently as the servlet container allows, exercising the real reservation
+            // race end to end (HTTP -> service -> tryReserve -> database unique constraint)
+            Future<MvcResult> firstFuture = executor.submit(task);
+            Future<MvcResult> secondFuture = executor.submit(task);
+            startingGate.countDown();
+            MvcResult first = firstFuture.get(10, TimeUnit.SECONDS);
+            MvcResult second = secondFuture.get(10, TimeUnit.SECONDS);
+            executor.shutdown();
+
+            // then
+            wireMock.verify(1, postRequestedFor(urlEqualTo(PROVIDER_PATH)));
+            assertThat(first.getResponse().getStatus()).isIn(201, 202);
+            assertThat(second.getResponse().getStatus()).isIn(201, 202);
+            // at least one of the two must have actually seen the finished result — otherwise
+            // both requests would have timed out waiting on each other, which would itself be a bug
+            assertThat(List.of(first.getResponse().getStatus(), second.getResponse().getStatus()))
+                    .contains(201);
+        }
+
+        @Test
+        @DisplayName("GIVEN the winning request's provider call outlasts the losing request's bounded poll budget, WHEN posting concurrently, THEN the losing request returns 202 Accepted with a Location it can poll instead of blocking or guessing at an outcome")
+        void returns202WhenPollBudgetRunsOutBeforeResolution() throws Exception {
+            // given: the provider takes 300ms to respond — long enough to outlast the losing
+            // request's poll budget (app.idempotency.poll-interval=20ms x poll-attempts=3 = 60ms
+            // in application-test.yml), so we can deterministically observe the 202 path.
+            wireMock.stubFor(post(urlEqualTo(PROVIDER_PATH))
+                    .willReturn(okJson("""
+                            {"transactionId":"prov-slow","status":"APPROVED","balance":650.00,"executedAt":"2026-01-01T00:00:00Z"}
+                            """).withFixedDelay(300)));
+            String idempotencyKey = newIdempotencyKey();
+            String body = requestJson("acc-slow", TransactionType.CREDIT, new BigDecimal("100.00"), DEFAULT_CURRENCY, "Test");
+
+            ExecutorService executor = Executors.newFixedThreadPool(1);
+            Future<MvcResult> winnerFuture = executor.submit(() -> postTransaction(idempotencyKey, body));
+            // give the winner just enough time to clear tryReserve and start the (slow) provider
+            // call before the loser attempts its own reservation
+            Thread.sleep(30);
+            MvcResult loserResult = postTransaction(idempotencyKey, body);
+            MvcResult winnerResult = winnerFuture.get(10, TimeUnit.SECONDS);
+            executor.shutdown();
+
+            // then
+            assertThat(loserResult.getResponse().getStatus()).isEqualTo(202);
+            assertThat(loserResult.getResponse().getHeader("Location"))
+                    .isEqualTo("/transactions?idempotencyKey=" + idempotencyKey);
+            assertThat(winnerResult.getResponse().getStatus()).isEqualTo(201);
+            wireMock.verify(1, postRequestedFor(urlEqualTo(PROVIDER_PATH)));
         }
     }
 

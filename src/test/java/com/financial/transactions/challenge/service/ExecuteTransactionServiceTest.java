@@ -10,7 +10,9 @@ import com.financial.transactions.challenge.domain.exception.InvalidAmountExcept
 import com.financial.transactions.challenge.domain.exception.ProviderCommunicationException;
 import com.financial.transactions.challenge.domain.exception.ProviderRejectedException;
 import com.financial.transactions.challenge.domain.exception.ProviderTimeoutException;
+import com.financial.transactions.challenge.domain.exception.TransactionStillPendingException;
 import com.financial.transactions.challenge.domain.exception.UnsupportedCurrencyException;
+import com.financial.transactions.challenge.provider.ProviderProperties;
 import com.financial.transactions.challenge.service.port.ProviderResult;
 import com.financial.transactions.challenge.service.port.TransactionProvider;
 import com.financial.transactions.challenge.service.port.TransactionRepository;
@@ -25,6 +27,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -48,6 +51,11 @@ class ExecuteTransactionServiceTest {
     private static final String CURRENCY = "MXN";
     private static final String DESCRIPTION = "Test transaction";
 
+    // Short poll budget so tests that exercise the "lost the reservation race" path stay fast
+    // (2 attempts * 5ms = 10ms max) without changing the production defaults.
+    private static final ProviderProperties TEST_PROPERTIES = new ProviderProperties(
+            null, null, new ProviderProperties.Idempotency(Duration.ofMillis(5), 2));
+
     @Mock
     private TransactionRepository repository;
 
@@ -59,7 +67,7 @@ class ExecuteTransactionServiceTest {
     @BeforeEach
     void setUp() {
         Clock fixedClock = Clock.fixed(FIXED_INSTANT, ZoneOffset.UTC);
-        service = new ExecuteTransactionService(repository, provider, fixedClock);
+        service = new ExecuteTransactionService(repository, provider, fixedClock, TEST_PROPERTIES);
     }
 
     private ExecuteTransactionCommand aCommand(String idempotencyKey, String accountId, TransactionType type,
@@ -79,25 +87,33 @@ class ExecuteTransactionServiceTest {
         return new ProviderResult("prov-999", new BigDecimal("450.00"), FIXED_INSTANT);
     }
 
+    /** Stubs the common "no existing transaction, this request wins the reservation" setup. */
+    private void givenNewIdempotencyKeyWinsReservation() {
+        when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
+        when(repository.tryReserve(any())).thenReturn(true);
+    }
+
     @Nested
     @DisplayName("Idempotency")
     class Idempotency {
 
         @Test
-        @DisplayName("Given no transaction exists with that idempotency key, when executing, then it continues the normal flow")
+        @DisplayName("Given no transaction exists with that idempotency key, when executing, then it reserves the key, calls the provider once, and continues the normal flow")
         void continuesNormalFlow() {
             // given
-            ExecuteTransactionCommand command = aValidCommand();
-            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
-            when(provider.execute(any(), any(), any())).thenReturn(aProviderResult());
+            givenNewIdempotencyKeyWinsReservation();
+            when(provider.execute(any(), any(), any(), any())).thenReturn(aProviderResult());
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+            ExecuteTransactionCommand command = aValidCommand();
 
             // when
             Transaction result = service.execute(command);
 
             // then
             assertThat(result.status()).isEqualTo(TransactionStatus.EXECUTED);
-            verify(provider, times(1)).execute(any(), any(), any());
+            verify(repository, times(1)).tryReserve(any());
+            verify(provider, times(1)).execute(any(), any(), any(), any());
         }
 
         @Test
@@ -117,8 +133,9 @@ class ExecuteTransactionServiceTest {
 
             // then
             assertThat(result).isEqualTo(existing);
-            verify(provider, never()).execute(any(), any(), any());
+            verify(provider, never()).execute(any(), any(), any(), any());
             verify(repository, never()).save(any());
+            verify(repository, never()).tryReserve(any());
         }
 
         @Test
@@ -138,12 +155,12 @@ class ExecuteTransactionServiceTest {
 
             // then
             assertThat(result).isEqualTo(existing);
-            verify(provider, never()).execute(any(), any(), any());
+            verify(provider, never()).execute(any(), any(), any(), any());
             verify(repository, never()).save(any());
         }
 
         @Test
-        @DisplayName("Given a transaction already exists with that idempotency key and status FAILED, when executing, then the provider is invoked again")
+        @DisplayName("Given a transaction already exists with that idempotency key and status FAILED, when executing, then the provider is invoked again with the same idempotency key")
         void retriesProviderForFailedTransaction() {
             // given
             Transaction existing = Transaction.failed(
@@ -151,7 +168,7 @@ class ExecuteTransactionServiceTest {
                     DESCRIPTION, "Provider did not respond within the socket timeout", FIXED_INSTANT
             );
             when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.of(existing));
-            when(provider.execute(any(), any(), any())).thenReturn(aProviderResult());
+            when(provider.execute(any(), any(), any(), any())).thenReturn(aProviderResult());
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
             ExecuteTransactionCommand command = aValidCommand();
@@ -160,7 +177,7 @@ class ExecuteTransactionServiceTest {
             service.execute(command);
 
             // then
-            verify(provider, times(1)).execute(any(), any(), any());
+            verify(provider, times(1)).execute(IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT, Money.of(AMOUNT, CURRENCY));
         }
 
         @Test
@@ -172,7 +189,7 @@ class ExecuteTransactionServiceTest {
                     DESCRIPTION, "Provider did not respond within the socket timeout", FIXED_INSTANT
             );
             when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.of(existing));
-            when(provider.execute(any(), any(), any())).thenReturn(aProviderResult());
+            when(provider.execute(any(), any(), any(), any())).thenReturn(aProviderResult());
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
             ExecuteTransactionCommand command = aValidCommand();
@@ -194,7 +211,7 @@ class ExecuteTransactionServiceTest {
                     DESCRIPTION, "Provider did not respond within the socket timeout", FIXED_INSTANT
             );
             when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.of(existing));
-            when(provider.execute(any(), any(), any()))
+            when(provider.execute(any(), any(), any(), any()))
                     .thenThrow(new ProviderTimeoutException("Provider did not respond within the socket timeout"));
             ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
             when(repository.save(captor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -269,6 +286,78 @@ class ExecuteTransactionServiceTest {
     }
 
     @Nested
+    @DisplayName("Concurrent idempotency-key reservation")
+    class ConcurrentReservation {
+
+        @Test
+        @DisplayName("Given two concurrent requests with the same new idempotency key, when this request loses the reservation race and the winner resolves to EXECUTED before the poll budget runs out, then it returns the winner's result without calling the provider itself")
+        void losesRaceAndAdoptsWinnersResult() {
+            // given
+            Transaction winnerResult = Transaction.executed(
+                    IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT, Money.of(AMOUNT, CURRENCY),
+                    DESCRIPTION, "prov-777", new BigDecimal("300.00"), FIXED_INSTANT
+            );
+            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY))
+                    .thenReturn(Optional.empty())   // initial lookup: nothing yet
+                    .thenReturn(Optional.empty())   // first poll: winner hasn't resolved yet
+                    .thenReturn(Optional.of(winnerResult)); // second poll: winner resolved
+            when(repository.tryReserve(any())).thenReturn(false); // another request already owns the key
+
+            ExecuteTransactionCommand command = aValidCommand();
+
+            // when
+            Transaction result = service.execute(command);
+
+            // then
+            assertThat(result).isEqualTo(winnerResult);
+            verify(provider, never()).execute(any(), any(), any(), any());
+            verify(repository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Given two concurrent requests with the same new idempotency key, when this request loses the reservation race and the winner never resolves within the poll budget, then it throws TransactionStillPendingException instead of calling the provider or blocking indefinitely")
+        void losesRaceAndTimesOutWaitingForResolution() {
+            // given
+            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
+            when(repository.tryReserve(any())).thenReturn(false);
+
+            ExecuteTransactionCommand command = aValidCommand();
+
+            // when
+            // then
+            assertThatThrownBy(() -> service.execute(command))
+                    .isInstanceOf(TransactionStillPendingException.class);
+            verify(provider, never()).execute(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Given a lookup finds an existing PENDING reservation directly (client retried the HTTP call itself), when executing, then it polls for resolution instead of treating PENDING as terminal")
+        void findsPendingDirectlyAndWaitsForResolution() {
+            // given
+            Transaction pending = Transaction.pending(
+                    java.util.UUID.randomUUID(), IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT,
+                    Money.of(AMOUNT, CURRENCY), DESCRIPTION, FIXED_INSTANT);
+            Transaction resolved = Transaction.executed(
+                    pending.id(), IDEMPOTENCY_KEY, ACCOUNT_ID, TransactionType.CREDIT, Money.of(AMOUNT, CURRENCY),
+                    DESCRIPTION, "prov-321", new BigDecimal("700.00"), FIXED_INSTANT
+            );
+            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY))
+                    .thenReturn(Optional.of(pending))   // initial lookup
+                    .thenReturn(Optional.of(resolved));  // first poll already resolved
+
+            ExecuteTransactionCommand command = aValidCommand();
+
+            // when
+            Transaction result = service.execute(command);
+
+            // then
+            assertThat(result).isEqualTo(resolved);
+            verify(provider, never()).execute(any(), any(), any(), any());
+            verify(repository, never()).tryReserve(any());
+        }
+    }
+
+    @Nested
     @DisplayName("Business rule validation")
     class BusinessRuleValidation {
 
@@ -283,7 +372,7 @@ class ExecuteTransactionServiceTest {
             // then
             assertThatThrownBy(() -> service.execute(command))
                     .isInstanceOf(InvalidAmountException.class);
-            verify(provider, never()).execute(any(), any(), any());
+            verify(provider, never()).execute(any(), any(), any(), any());
         }
 
         @Test
@@ -297,22 +386,22 @@ class ExecuteTransactionServiceTest {
             // then
             assertThatThrownBy(() -> service.execute(command))
                     .isInstanceOf(DebitLimitExceededException.class);
-            verify(provider, never()).execute(any(), any(), any());
+            verify(provider, never()).execute(any(), any(), any(), any());
         }
 
         @Test
         @DisplayName("Given a CREDIT with an amount greater than $10,000.00, when executing, then it does not throw and continues the normal flow")
         void allowsCreditAboveDebitLimit() {
             // given
-            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
-            when(provider.execute(any(), any(), any())).thenReturn(aProviderResult());
+            givenNewIdempotencyKeyWinsReservation();
+            when(provider.execute(any(), any(), any(), any())).thenReturn(aProviderResult());
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
             ExecuteTransactionCommand command = aValidCommand(TransactionType.CREDIT, new BigDecimal("50000.00"));
 
             // when
             // then
             assertThatCode(() -> service.execute(command)).doesNotThrowAnyException();
-            verify(provider, times(1)).execute(any(), any(), any());
+            verify(provider, times(1)).execute(any(), any(), any(), any());
         }
 
         @Test
@@ -327,7 +416,7 @@ class ExecuteTransactionServiceTest {
             // then
             assertThatThrownBy(() -> service.execute(command))
                     .isInstanceOf(UnsupportedCurrencyException.class);
-            verify(provider, never()).execute(any(), any(), any());
+            verify(provider, never()).execute(any(), any(), any(), any());
         }
 
         @Test
@@ -354,8 +443,8 @@ class ExecuteTransactionServiceTest {
         @DisplayName("Given the provider responds successfully, when executing, then the persisted Transaction has status EXECUTED with the provider's data and a null failureReason")
         void persistsExecutedTransaction() {
             // given
-            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
-            when(provider.execute(any(), any(), any())).thenReturn(aProviderResult());
+            givenNewIdempotencyKeyWinsReservation();
+            when(provider.execute(any(), any(), any(), any())).thenReturn(aProviderResult());
             ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
             when(repository.save(captor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -376,8 +465,8 @@ class ExecuteTransactionServiceTest {
         @DisplayName("Given the provider throws ProviderRejectedException, when executing, then the persisted Transaction has status REJECTED with no provider data and a null failureReason")
         void persistsRejectedTransaction() {
             // given
-            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
-            when(provider.execute(any(), any(), any()))
+            givenNewIdempotencyKeyWinsReservation();
+            when(provider.execute(any(), any(), any(), any()))
                     .thenThrow(new ProviderRejectedException("INSUFFICIENT_FUNDS", "Account balance too low"));
             ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
             when(repository.save(captor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -399,8 +488,8 @@ class ExecuteTransactionServiceTest {
         @DisplayName("Given the provider throws ProviderTimeoutException, when executing, then it saves a FAILED transaction with a populated failureReason and re-throws the exception")
         void savesFailedTransactionAndRethrowsOnTimeout() {
             // given
-            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
-            when(provider.execute(any(), any(), any()))
+            givenNewIdempotencyKeyWinsReservation();
+            when(provider.execute(any(), any(), any(), any()))
                     .thenThrow(new ProviderTimeoutException("Provider did not respond within the socket timeout"));
             ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
             when(repository.save(captor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -424,8 +513,8 @@ class ExecuteTransactionServiceTest {
         @DisplayName("Given the provider throws ProviderCommunicationException, when executing, then it saves a FAILED transaction with a populated failureReason and re-throws the exception")
         void savesFailedTransactionAndRethrowsOnCommunicationFailure() {
             // given
-            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
-            when(provider.execute(any(), any(), any()))
+            givenNewIdempotencyKeyWinsReservation();
+            when(provider.execute(any(), any(), any(), any()))
                     .thenThrow(new ProviderCommunicationException("Circuit breaker is open for the transaction provider"));
             ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
             when(repository.save(captor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -449,8 +538,8 @@ class ExecuteTransactionServiceTest {
         @DisplayName("Given any provider outcome, when executing, then repository.save is invoked exactly once with the Transaction built from the command")
         void savesExactlyOnceWithMatchingTransaction() {
             // given
-            when(repository.findByIdempotencyKey(IDEMPOTENCY_KEY)).thenReturn(Optional.empty());
-            when(provider.execute(any(), any(), any())).thenReturn(aProviderResult());
+            givenNewIdempotencyKeyWinsReservation();
+            when(provider.execute(any(), any(), any(), any())).thenReturn(aProviderResult());
             ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
             when(repository.save(captor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
 

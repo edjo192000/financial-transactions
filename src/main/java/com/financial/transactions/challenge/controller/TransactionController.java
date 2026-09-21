@@ -6,6 +6,7 @@ import com.financial.transactions.challenge.controller.dto.TransactionResponse;
 import com.financial.transactions.challenge.domain.Transaction;
 import com.financial.transactions.challenge.domain.TransactionStatus;
 import com.financial.transactions.challenge.domain.TransactionType;
+import com.financial.transactions.challenge.domain.exception.TransactionStillPendingException;
 import com.financial.transactions.challenge.service.ExecuteTransactionCommand;
 import com.financial.transactions.challenge.service.ExecuteTransactionService;
 import com.financial.transactions.challenge.service.QueryTransactionService;
@@ -25,6 +26,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @RestController
@@ -111,6 +115,12 @@ public class TransactionController {
                     description = "The external provider did not respond within the expected time, even after "
                             + "retries (PROVIDER_TIMEOUT).",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ErrorResponse.class))
+            ),
+            @ApiResponse(
+                    responseCode = "202",
+                    description = "A concurrent request with the same Idempotency-Key is still being processed "
+                            + "and didn't resolve within the bounded wait. No body; poll the Location header "
+                            + "(GET /transactions?idempotencyKey=...) for the outcome instead of retrying this POST."
             )
     })
     public ResponseEntity<TransactionResponse> execute(
@@ -131,6 +141,18 @@ public class TransactionController {
         return ResponseEntity.status(HttpStatus.CREATED).body(TransactionResponse.from(result));
     }
 
+    @ExceptionHandler(TransactionStillPendingException.class)
+    public ResponseEntity<Void> handleStillPending(TransactionStillPendingException ex) {
+        String encodedKey = URLEncoder.encode(ex.idempotencyKey(), StandardCharsets.UTF_8);
+        URI location = URI.create("/transactions?idempotencyKey=" + encodedKey);
+
+        // 202: a concurrent request already owns this Idempotency-Key and hasn't resolved yet.
+        // We deliberately don't guess at EXECUTED/REJECTED/FAILED here — the client polls the
+        // Location on its own terms instead of us either blocking the Tomcat thread indefinitely
+        // or fabricating an outcome we don't actually know.
+        return ResponseEntity.accepted().location(location).build();
+    }
+
     @GetMapping(version = API_VERSION_1)
     @Operation(summary = "Queries transactions with filters and pagination")
     public List<TransactionResponse> query(
@@ -143,13 +165,17 @@ public class TransactionController {
             @Parameter(description = "Filter by transaction type.")
             @RequestParam(required = false) TransactionType type,
 
+            @Parameter(description = "Filter by the exact Idempotency-Key used when the transaction was submitted. "
+                    + "Useful to poll the outcome after a 202 Accepted response.")
+            @RequestParam(required = false) String idempotencyKey,
+
             @Parameter(description = "Page to query (0-indexed). Defaults to 0.")
             @RequestParam(required = false) Integer page,
 
             @Parameter(description = "Number of results per page. Defaults to 20, maximum 100.")
             @RequestParam(required = false) Integer limit) {
 
-        TransactionFilters filters = TransactionFilters.of(accountId, status, type, page, limit);
+        TransactionFilters filters = TransactionFilters.of(accountId, status, type, idempotencyKey, page, limit);
 
         return queryTransactionService.query(filters).stream()
                 .map(TransactionResponse::from)

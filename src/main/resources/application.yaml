@@ -52,3 +52,6 @@ app:
     max-pool-size: 50
     queue-capacity: 100
     future-timeout: 5s
+  idempotency:
+    poll-interval: 150ms
+    poll-attempts: 3

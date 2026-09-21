@@ -20,7 +20,7 @@ class TransactionFiltersTest {
             int page = 0;
 
             // when
-            TransactionFilters filters = new TransactionFilters(null, null, null, page, 20);
+            TransactionFilters filters = new TransactionFilters(null, null, null, null, page, 20);
 
             // then
             assertThat(filters.page()).isEqualTo(0);
@@ -33,7 +33,7 @@ class TransactionFiltersTest {
             int page = 5;
 
             // when
-            TransactionFilters filters = new TransactionFilters(null, null, null, page, 20);
+            TransactionFilters filters = new TransactionFilters(null, null, null, null, page, 20);
 
             // then
             assertThat(filters.page()).isEqualTo(5);
@@ -47,7 +47,7 @@ class TransactionFiltersTest {
 
             // when
             // then
-            assertThatThrownBy(() -> new TransactionFilters(null, null, null, page, 20))
+            assertThatThrownBy(() -> new TransactionFilters(null, null, null, null, page, 20))
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }
@@ -63,7 +63,7 @@ class TransactionFiltersTest {
             int limit = 0;
 
             // when
-            TransactionFilters filters = new TransactionFilters(null, null, null, 0, limit);
+            TransactionFilters filters = new TransactionFilters(null, null, null, null, 0, limit);
 
             // then
             assertThat(filters.limit()).isEqualTo(20);
@@ -76,7 +76,7 @@ class TransactionFiltersTest {
             int limit = -5;
 
             // when
-            TransactionFilters filters = new TransactionFilters(null, null, null, 0, limit);
+            TransactionFilters filters = new TransactionFilters(null, null, null, null, 0, limit);
 
             // then
             assertThat(filters.limit()).isEqualTo(20);
@@ -89,7 +89,7 @@ class TransactionFiltersTest {
             int limit = 50;
 
             // when
-            TransactionFilters filters = new TransactionFilters(null, null, null, 0, limit);
+            TransactionFilters filters = new TransactionFilters(null, null, null, null, 0, limit);
 
             // then
             assertThat(filters.limit()).isEqualTo(50);
@@ -102,7 +102,7 @@ class TransactionFiltersTest {
             int limit = 100;
 
             // when
-            TransactionFilters filters = new TransactionFilters(null, null, null, 0, limit);
+            TransactionFilters filters = new TransactionFilters(null, null, null, null, 0, limit);
 
             // then
             assertThat(filters.limit()).isEqualTo(100);
@@ -115,7 +115,7 @@ class TransactionFiltersTest {
             int limit = 101;
 
             // when
-            TransactionFilters filters = new TransactionFilters(null, null, null, 0, limit);
+            TransactionFilters filters = new TransactionFilters(null, null, null, null, 0, limit);
 
             // then
             assertThat(filters.limit()).isEqualTo(100);
@@ -128,7 +128,7 @@ class TransactionFiltersTest {
             int limit = 10000;
 
             // when
-            TransactionFilters filters = new TransactionFilters(null, null, null, 0, limit);
+            TransactionFilters filters = new TransactionFilters(null, null, null, null, 0, limit);
 
             // then
             assertThat(filters.limit()).isEqualTo(100);
@@ -147,7 +147,7 @@ class TransactionFiltersTest {
             Integer limit = null;
 
             // when
-            TransactionFilters filters = TransactionFilters.of(null, null, null, page, limit);
+            TransactionFilters filters = TransactionFilters.of(null, null, null, null, page, limit);
 
             // then
             assertThat(filters.page()).isEqualTo(0);
@@ -162,7 +162,7 @@ class TransactionFiltersTest {
             Integer limit = 50;
 
             // when
-            TransactionFilters filters = TransactionFilters.of(null, null, null, page, limit);
+            TransactionFilters filters = TransactionFilters.of(null, null, null, null, page, limit);
 
             // then
             assertThat(filters.page()).isEqualTo(3);
@@ -170,16 +170,17 @@ class TransactionFiltersTest {
         }
 
         @Test
-        @DisplayName("GIVEN accountId, status and type all null, WHEN TransactionFilters.of is called, THEN no exception is thrown and all three remain null")
+        @DisplayName("GIVEN accountId, status, type and idempotencyKey all null, WHEN TransactionFilters.of is called, THEN no exception is thrown and all four remain null")
         void allowsAllCriteriaNull() {
             // given
             // when
-            TransactionFilters filters = TransactionFilters.of(null, null, null, null, null);
+            TransactionFilters filters = TransactionFilters.of(null, null, null, null, null, null);
 
             // then
             assertThat(filters.accountId()).isNull();
             assertThat(filters.status()).isNull();
             assertThat(filters.type()).isNull();
+            assertThat(filters.idempotencyKey()).isNull();
         }
 
         @Test
@@ -189,10 +190,23 @@ class TransactionFiltersTest {
             Integer limit = 200;
 
             // when
-            TransactionFilters filters = TransactionFilters.of(null, null, null, null, limit);
+            TransactionFilters filters = TransactionFilters.of(null, null, null, null, null, limit);
 
             // then
             assertThat(filters.limit()).isEqualTo(100);
+        }
+
+        @Test
+        @DisplayName("GIVEN a non-null idempotencyKey, WHEN TransactionFilters.of is called, THEN it is preserved exactly — used to let a client poll the outcome after a 202 Accepted response")
+        void preservesIdempotencyKey() {
+            // given
+            String idempotencyKey = "idem-key-42";
+
+            // when
+            TransactionFilters filters = TransactionFilters.of(null, null, null, idempotencyKey, null, null);
+
+            // then
+            assertThat(filters.idempotencyKey()).isEqualTo(idempotencyKey);
         }
     }
 }

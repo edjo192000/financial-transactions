@@ -39,8 +39,9 @@ public class ResilientProviderClient {
 
     @CircuitBreaker(name = "transactionProvider")
     @Retry(name = "transactionProvider")
-    public ProviderExecuteResponse execute(String accountId, TransactionType type, Money money) {
-        Callable<ProviderExecuteResponse> callable = () -> callProvider(accountId, type, money);
+    public ProviderExecuteResponse execute(String idempotencyKey, String accountId, TransactionType type,
+                                            Money money) {
+        Callable<ProviderExecuteResponse> callable = () -> callProvider(idempotencyKey, accountId, type, money);
         Future<ProviderExecuteResponse> future = providerExecutor.submit(callable);
 
         try {
@@ -61,12 +62,17 @@ public class ResilientProviderClient {
         }
     }
 
-    private ProviderExecuteResponse callProvider(String accountId, TransactionType type, Money money) {
+    private ProviderExecuteResponse callProvider(String idempotencyKey, String accountId, TransactionType type,
+                                                  Money money) {
         ProviderExecuteRequest request = new ProviderExecuteRequest(accountId, type.name(), money.amount(), money.currency());
 
         try {
+            // Same idempotencyKey on every retry of this call — whether triggered by
+            // Resilience4j's own @Retry, or by us retrying a previously-FAILED transaction — so
+            // the provider can recognize a repeat and avoid executing the operation twice.
             return providerRestClient.post()
                     .uri("/v1/execute")
+                    .header("Idempotency-Key", idempotencyKey)
                     .body(request)
                     .retrieve()
                     .body(ProviderExecuteResponse.class);

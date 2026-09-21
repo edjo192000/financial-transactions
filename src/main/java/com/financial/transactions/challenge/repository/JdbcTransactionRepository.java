@@ -58,6 +58,29 @@ public class JdbcTransactionRepository implements TransactionRepository {
     }
 
     @Override
+    public boolean tryReserve(Transaction pendingTransaction) {
+        int rowsInserted = jdbcClient.sql("""
+                INSERT INTO transactions (id, idempotency_key, account_id, type, amount, currency,
+                    description, status, created_at)
+                VALUES (:id, :idempotencyKey, :accountId, :type, :amount, :currency,
+                    :description, :status, :createdAt)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                """)
+                .param("id", pendingTransaction.id())
+                .param("idempotencyKey", pendingTransaction.idempotencyKey())
+                .param("accountId", pendingTransaction.accountId())
+                .param("type", pendingTransaction.type().name())
+                .param("amount", pendingTransaction.money().amount())
+                .param("currency", pendingTransaction.money().currency())
+                .param("description", pendingTransaction.description())
+                .param("status", pendingTransaction.status().name())
+                .param("createdAt", Timestamp.from(pendingTransaction.createdAt()))
+                .update();
+
+        return rowsInserted == 1;
+    }
+
+    @Override
     public Optional<Transaction> findById(UUID id) {
         return jdbcClient.sql("SELECT * FROM transactions WHERE id = :id")
                 .param("id", id)
@@ -86,6 +109,9 @@ public class JdbcTransactionRepository implements TransactionRepository {
         if (filters.type() != null) {
             sql.append(" AND type = :type");
         }
+        if (filters.idempotencyKey() != null) {
+            sql.append(" AND idempotency_key = :idempotencyKey");
+        }
         sql.append(" ORDER BY created_at DESC LIMIT :limit OFFSET :offset");
 
         StatementSpec spec = jdbcClient.sql(sql.toString())
@@ -100,6 +126,9 @@ public class JdbcTransactionRepository implements TransactionRepository {
         }
         if (filters.type() != null) {
             spec.param("type", filters.type().name());
+        }
+        if (filters.idempotencyKey() != null) {
+            spec.param("idempotencyKey", filters.idempotencyKey());
         }
 
         return spec.query(this::mapRow).list();

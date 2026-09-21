@@ -7,7 +7,8 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "app")
 public record ProviderProperties(
         Provider provider,
-        ProviderExecutor providerExecutor
+        ProviderExecutor providerExecutor,
+        Idempotency idempotency
 ) {
 
     public record Provider(
@@ -22,6 +23,17 @@ public record ProviderProperties(
             int maxPoolSize,
             int queueCapacity,
             Duration futureTimeout
+    ) {
+    }
+
+    /**
+     * Bounds how long a caller who lost the idempotency-key reservation race waits for the
+     * winning request to resolve it, before giving up and responding 202 Accepted instead of
+     * blocking a Tomcat thread indefinitely.
+     */
+    public record Idempotency(
+            Duration pollInterval,
+            int pollAttempts
     ) {
     }
 }

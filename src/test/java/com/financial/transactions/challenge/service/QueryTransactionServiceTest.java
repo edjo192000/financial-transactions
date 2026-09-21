@@ -41,7 +41,7 @@ class QueryTransactionServiceTest {
 
     private TransactionFilters aFilters(String accountId, TransactionStatus status, TransactionType type,
                                          int page, int limit) {
-        return new TransactionFilters(accountId, status, type, page, limit);
+        return new TransactionFilters(accountId, status, type, null, page, limit);
     }
 
     private Transaction aTransaction(String accountId) {

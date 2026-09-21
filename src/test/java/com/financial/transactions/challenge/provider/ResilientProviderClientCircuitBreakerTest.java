@@ -57,12 +57,12 @@ class ResilientProviderClientCircuitBreakerTest {
             wireMock.stubFor(post(urlEqualTo("/provider/v1/execute")).willReturn(aResponse().withStatus(503)));
 
             for (int i = 0; i < 4; i++) {
-                catchThrowable(() -> provider.execute("acc-cb", TransactionType.CREDIT, new Money(new BigDecimal("10.00"), "MXN")));
+                catchThrowable(() -> provider.execute("idem-cb", "acc-cb", TransactionType.CREDIT, new Money(new BigDecimal("10.00"), "MXN")));
             }
 
             // when
             Throwable thrown = catchThrowable(() ->
-                    provider.execute("acc-cb", TransactionType.CREDIT, new Money(new BigDecimal("10.00"), "MXN")));
+                    provider.execute("idem-cb", "acc-cb", TransactionType.CREDIT, new Money(new BigDecimal("10.00"), "MXN")));
 
             // then
             assertThat(thrown).isInstanceOf(ProviderCommunicationException.class);
